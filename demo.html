@@ -1,0 +1,186 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Knockout 监控实现(依赖监控)mini</title>
+<script type="text/javascript" src="jquery/jquery-1.8.3.js"></script>
+
+</head>
+
+<body>
+
+ 
+<script type="text/javascript">
+
+var $ = $ || {};
+
+$.isDifferent = function(oldValue, newValue){
+	var primitiveTypes = { 'undefined':1, 'boolean':1, 'number':1, 'string':1 };	
+	var oldValueIsPrimitive = (oldValue === null) || (typeof(oldValue) in primitiveTypes);
+    return !(oldValueIsPrimitive ? (oldValue === newValue) : false);
+};
+
+$.dependencyDetection = (function(){
+	var _frames = [];
+    return {
+        begin: function (ret) {
+            _frames.push(ret);
+        },
+        end: function () {
+            _frames.pop();
+        },
+        registerDependency: function (self) {
+            if (_frames.length > 0) {
+                self.watchers = self.watchers || [];
+                var fn = _frames[_frames.length - 1];
+                if ( self.watchers.indexOf( fn ) >= 0)
+                    return;
+                self.watchers.push(fn);
+            }
+        }
+    };	
+})();
+
+$.notifyWatchers = function(observable){
+	var watchers = observable.watchers || [];
+	for(var i = 0, cb; cb = watchers[i++];i<watchers.length){
+		cb.isObservable ? cb() : cb(observable.latestValue);//调用getter
+	}	
+};
+
+$.computed = function(evaluatorFunctionOrOptions, scope){
+	var options = {};
+	var latestValue = undefined;
+	if (typeof evaluatorFunctionOrOptions === "object") {
+        // Single-parameter syntax - everything is on this "options" param
+        options = evaluatorFunctionOrOptions;
+    } else {
+		//read 
+		options["read"] = evaluatorFunctionOrOptions;
+		options["scope"] = scope;
+    }	
+	
+	if (typeof options["read"] != "function")
+        throw Error("Pass a function that returns the value of the $.computed");
+	
+	var writeFn = options["write"];
+	var readFn = options["read"];
+	
+	function computedObservable() {
+        if (arguments.length > 0) {
+            if (typeof writeFn === "function") {
+                // Writing a value
+                writeFn.apply(evaluatorFunctionOrOptions, arguments);
+            } else {
+                throw new Error("Cannot write a value to a $.computed unless you specify a 'write' option. If you wish to read the current value, don't pass any parameters.");
+            }
+            return this; // Permits chained assignments
+        } else {
+            //依赖收集
+			$.dependencyDetection.registerDependency(computedObservable);
+			
+			var newValue = computedObservable.evaluateImmediate();
+			
+			//var newValue = readFn.call(scope);
+			computedObservable['latestValue'] = newValue;
+						
+			if($.isDifferent(latestValue, newValue)) {//
+				$.notifyWatchers(computedObservable);	
+			}
+			
+			latestValue = newValue;
+			
+			
+            return latestValue;
+        }
+    }
+	//依赖检测
+	computedObservable.evaluateImmediate = function(){
+		var computedObservable = this;
+		var newValue;
+		$.dependencyDetection.begin(computedObservable);
+		
+		newValue = readFn.call(scope);
+		
+		$.dependencyDetection.end();
+		
+		return newValue;
+	}
+	
+	computedObservable.isObservable = true;
+	
+	computedObservable.scope = scope;
+	
+	computedObservable.$watch = function(cb){
+		this.watchers = this.watchers || [];
+		this.watchers.push(cb);
+		return this;
+	}
+	
+	return computedObservable;
+		
+};
+
+$.observable = function( initialValue ){
+	
+	var latestValue = initialValue;
+	
+	function observable(){
+		if (arguments.length > 0) {
+            // Write
+            // Ignore writes if the value hasn't changed
+            if ($.isDifferent(latestValue, arguments[0])) {
+               //observable.valueWillMutate();
+                latestValue = arguments[0];
+				observable.latestValue = arguments[0];
+               //observable.valueHasMutated();
+			   $.notifyWatchers(observable);
+			   
+            }
+            return this; // Permits chained assignments
+        }
+        else {
+            // Read
+            $.dependencyDetection.registerDependency(observable); // The caller only needs to be notified of changes if they did a "read" operation
+            return latestValue;
+        }
+	
+	}
+	
+	observable.isObservable = true;
+	
+	observable.$watch = function(cb){
+		this.watchers = this.watchers || [];
+		this.watchers.push(cb);
+		return this;
+	}
+	
+	return observable;
+}
+
+
+function viewModel(){
+	this.firstName = $.observable('NOBO');	
+	this.lastName = $.observable('ZHOU');	
+	this.fullName = $.computed(function(){
+		return this.firstName() + ' ' + this.lastName() + ' cc';	
+	}, this);	
+	this.fullName2 = $.computed(function(){
+		return this.fullName() + ' dd';	
+	}, this);	
+	this.firstName.$watch(function(v){
+		console.log('firstName change: '+v);	
+	});
+	this.fullName.$watch(function(v){
+		console.log('fullName change: '+v);	
+	});
+}
+
+var vm = new viewModel();
+
+</script>
+
+
+
+</body>
+</html>
